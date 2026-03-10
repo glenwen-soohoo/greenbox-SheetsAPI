@@ -131,7 +131,7 @@ const API_CONTEXT = {
     '開發完成後，若需要將路徑切換至正式 Sheet，請通知 Glen 協助更新 API 路徑與對應的 Sheet ID。',
 };
 
-function buildHowToUse(tabs = []) {
+function buildHowToUse(tabs = [], sheet = 'test') {
   const locked = tabs.length > 0;
 
   // 鎖定模式：為每個分頁生成一組完整可用的 URL 清單
@@ -142,51 +142,51 @@ function buildHowToUse(tabs = []) {
       operations[tab] = {
         getRaw: {
           method: 'GET',
-          url: `/api/test/tabRaw=${encodedTab}`,
+          url: `/api/${sheet}/tabRaw=${encodedTab}`,
           description: '取得此分頁的原始資料（二維陣列，不處理標題），用於了解分頁結構',
         },
         getAllRows: {
           method: 'GET',
-          url: `/api/test/tab=${encodedTab}`,
+          url: `/api/${sheet}/tab=${encodedTab}`,
           description: '取得此分頁的全部資料列（回傳物件陣列，第一行為欄位名稱）',
         },
         getRow: {
           method: 'GET',
-          url: `/api/test/tab=${encodedTab}/row=N`,
+          url: `/api/${sheet}/tab=${encodedTab}/row=N`,
           description: '取得第 N 筆資料，將 N 替換為正整數（1 = 第一筆資料，不含標題列）',
         },
         getRows: {
           method: 'GET',
-          url: `/api/test/tab=${encodedTab}/row=X-Y`,
+          url: `/api/${sheet}/tab=${encodedTab}/row=X-Y`,
           description: '取得第 X 到第 Y 筆資料（含頭尾），X、Y 替換為正整數且 X <= Y',
         },
         append: {
           method: 'POST',
-          url: `/api/test/tab=${encodedTab}`,
+          url: `/api/${sheet}/tab=${encodedTab}`,
           description: '新增資料到此分頁末尾，支援三種格式',
           body: '單筆: { "values": ["v1","v2",...] } | 多筆陣列: { "values": [["v1","v2"],[...]] } | 多筆物件: { "rows": [{"欄位名":"值",...},...] }',
           warning: '使用 rows（物件格式）時，物件的 key 必須與該分頁的標題列欄位名稱完全一致（大小寫相同）。不符合的 key 會被忽略，該欄位將寫入空白。建議先用 GET 取得資料確認欄位名稱後再進行寫入。',
         },
         updateRow: {
           method: 'PUT',
-          url: `/api/test/tab=${encodedTab}/row=N`,
+          url: `/api/${sheet}/tab=${encodedTab}/row=N`,
           description: '覆寫第 N 筆資料，N 替換為正整數',
           body: '{ "values": ["欄位1值", "欄位2值", ...] }',
         },
         deleteRow: {
           method: 'DELETE',
-          url: `/api/test/tab=${encodedTab}/row=N`,
+          url: `/api/${sheet}/tab=${encodedTab}/row=N`,
           description: '清空第 N 筆資料的內容（列保留），N 替換為正整數',
         },
         addColumn: {
           method: 'POST',
-          url: `/api/test/tab=${encodedTab}/col`,
+          url: `/api/${sheet}/tab=${encodedTab}/col`,
           description: '在標題列末尾新增一個欄位，可同時填入各列的值。欄位名稱不可與現有欄位重複',
           body: '{ "name": "新欄位名稱", "values": ["row1值", "row2值", ...] }，values 為選填',
         },
         renameColumn: {
           method: 'PUT',
-          url: `/api/test/tab=${encodedTab}/col`,
+          url: `/api/${sheet}/tab=${encodedTab}/col`,
           description: '修改欄位名稱。from 必須是現有欄位，to 不可與現有欄位重複',
           body: '{ "from": "舊欄位名稱", "to": "新欄位名稱" }',
         },
@@ -211,37 +211,38 @@ function buildHowToUse(tabs = []) {
   return {
     mode: 'generic',
     context: API_CONTEXT,
-    urlEncoding: '當分頁名稱包含中文或特殊字元時，必須使用 encodeURIComponent 編碼後再放入 URL。例：分頁「測試」→ encodeURIComponent("測試") = "%E6%B8%AC%E8%A9%A6"，URL 為 /api/test/tab=%E6%B8%AC%E8%A9%A6。建議先呼叫 /api/test/tabsName 取得分頁名稱，再自行編碼組合 URL。',
+    urlEncoding: `當分頁名稱包含中文或特殊字元時，必須使用 encodeURIComponent 編碼後再放入 URL。例：分頁「測試」→ encodeURIComponent("測試") = "%E6%B8%AC%E8%A9%A6"，URL 為 /api/${sheet}/tab=%E6%B8%AC%E8%A9%A6。建議先呼叫 /api/${sheet}/tabsName 取得分頁名稱，再自行編碼組合 URL。`,
     rowNumbering: 'row 從 1 開始，不含標題列。row=1 是第一筆資料（Google Sheets 第 2 行）。',
     endpoints: [
-      { method: 'GET',    url: '/api/test/tabsName',         description: '取得所有分頁名稱（原始名稱，未編碼）' },
-      { method: 'GET',    url: '/api/test/tabRaw=:tab',      description: '取得分頁原始資料（二維陣列，不處理標題），供 Agent 了解分頁結構' },
-      { method: 'GET',    url: '/api/test/tab=:tab',         description: '取得分頁全部資料列，:tab 為 encodeURIComponent 編碼後的分頁名稱' },
-      { method: 'GET',    url: '/api/test/tab=:tab/row=N',   description: '取得第 N 筆資料' },
-      { method: 'GET',    url: '/api/test/tab=:tab/row=X-Y', description: '取得第 X～Y 筆資料' },
-      { method: 'POST',   url: '/api/test/tab=:tab',         description: '新增資料（單/多筆）  body: { values:[...或[[...]]] } 或 { rows:[{欄位名:值,...},...] }。注意：rows 格式的 key 必須與分頁標題列欄位名稱完全一致，不符的 key 將被忽略寫入空白。' },
-      { method: 'POST',   url: '/api/test/tab=:tab/col',     description: '新增欄位（可同時填值）  body: { name: "欄位名稱", values: [...] }' },
-      { method: 'PUT',    url: '/api/test/tab=:tab/col',     description: '修改欄位名稱  body: { from: "舊名稱", to: "新名稱" }' },
-      { method: 'PUT',    url: '/api/test/tab=:tab/row=N',   description: '更新第 N 筆資料  body: { values: [...] }' },
-      { method: 'DELETE', url: '/api/test/tab=:tab/row=N',   description: '清空第 N 筆資料' },
+      { method: 'GET',    url: `/api/${sheet}/tabsName`,         description: '取得所有分頁名稱（原始名稱，未編碼）' },
+      { method: 'GET',    url: `/api/${sheet}/tabRaw=:tab`,      description: '取得分頁原始資料（二維陣列，不處理標題），供 Agent 了解分頁結構' },
+      { method: 'GET',    url: `/api/${sheet}/tab=:tab`,         description: '取得分頁全部資料列，:tab 為 encodeURIComponent 編碼後的分頁名稱' },
+      { method: 'GET',    url: `/api/${sheet}/tab=:tab/row=N`,   description: '取得第 N 筆資料' },
+      { method: 'GET',    url: `/api/${sheet}/tab=:tab/row=X-Y`, description: '取得第 X～Y 筆資料' },
+      { method: 'POST',   url: `/api/${sheet}/tab=:tab`,         description: '新增資料（單/多筆）  body: { values:[...或[[...]]] } 或 { rows:[{欄位名:值,...},...] }。注意：rows 格式的 key 必須與分頁標題列欄位名稱完全一致，不符的 key 將被忽略寫入空白。' },
+      { method: 'POST',   url: `/api/${sheet}/tab=:tab/col`,     description: '新增欄位（可同時填值）  body: { name: "欄位名稱", values: [...] }' },
+      { method: 'PUT',    url: `/api/${sheet}/tab=:tab/col`,     description: '修改欄位名稱  body: { from: "舊名稱", to: "新名稱" }' },
+      { method: 'PUT',    url: `/api/${sheet}/tab=:tab/row=N`,   description: '更新第 N 筆資料  body: { values: [...] }' },
+      { method: 'DELETE', url: `/api/${sheet}/tab=:tab/row=N`,   description: '清空第 N 筆資料' },
     ],
-    tip: '若要鎖定特定分頁，改呼叫 GET /api/test/HowToUseForAgent/{分頁名稱} 取得專屬說明（URL 中的分頁名稱本身也需要 encodeURIComponent）。',
+    tip: `若要鎖定特定分頁，改呼叫 GET /api/${sheet}/HowToUseForAgent/{分頁名稱} 取得專屬說明（URL 中的分頁名稱本身也需要 encodeURIComponent）。`,
   };
 }
 
-// GET /api/test/HowToUseForAgent — 通用說明（tab 用佔位符顯示）
-app.get('/api/test/HowToUseForAgent', (req, res) => {
-  res.json(buildHowToUse());
+// GET /api/:sheet/HowToUseForAgent — 通用說明（tab 用佔位符顯示）
+app.get('/api/:sheet/HowToUseForAgent', (req, res) => {
+  res.json(buildHowToUse([], req.params.sheet));
 });
 
-// GET /api/test/HowToUseForAgent/分頁1/分頁2/... — 指定一或多個分頁，範例路徑預填
-app.get('/api/test/HowToUseForAgent/*tabs', (req, res) => {
+// GET /api/:sheet/HowToUseForAgent/分頁1/分頁2/... — 指定一或多個分頁，範例路徑預填
+app.get('/api/:sheet/HowToUseForAgent/*tabs', (req, res) => {
   try {
+    const { sheet } = req.params;
     // Express 5 中萬用字元參數可能是字串或陣列，兩種都處理
     const raw = req.params.tabs;
     const tabString = Array.isArray(raw) ? raw.join('/') : (raw ?? '');
     const tabs = tabString.split('/').filter(Boolean);
-    res.json(buildHowToUse(tabs));
+    res.json(buildHowToUse(tabs, sheet));
   } catch (e) {
     console.error('HowToUseForAgent error:', e);
     res.status(500).json({ success: false, error: e.message });
@@ -607,13 +608,13 @@ const ROUTES = [
   },
   {
     method: 'GET',
-    path: '/api/test/HowToUseForAgent',
+    path: '/api/:sheet/HowToUseForAgent',
     name: 'howToUse',
     description: '回傳完整 API 使用說明（供 AI Agent 理解本 API 的所有功能與用法）',
   },
   {
     method: 'GET',
-    path: '/api/test/HowToUseForAgent/:tab',
+    path: '/api/:sheet/HowToUseForAgent/:tab',
     name: 'howToUseForTab',
     description: '回傳完整 API 使用說明，並將操作範圍鎖定於指定分頁。Agent 只能對 allowedTabs 內的分頁進行操作。支援多分頁：/HowToUseForAgent/分頁1/分頁2/...',
   },
