@@ -140,6 +140,11 @@ function buildHowToUse(tabs = []) {
     for (const tab of tabs) {
       const encodedTab = encodeURIComponent(tab); // 中文分頁名稱必須編碼才能正確放入 URL
       operations[tab] = {
+        getRaw: {
+          method: 'GET',
+          url: `/api/test/tabRaw=${encodedTab}`,
+          description: '取得此分頁的原始資料（二維陣列，不處理標題），用於了解分頁結構',
+        },
         getAllRows: {
           method: 'GET',
           url: `/api/test/tab=${encodedTab}`,
@@ -210,6 +215,7 @@ function buildHowToUse(tabs = []) {
     rowNumbering: 'row 從 1 開始，不含標題列。row=1 是第一筆資料（Google Sheets 第 2 行）。',
     endpoints: [
       { method: 'GET',    url: '/api/test/tabsName',         description: '取得所有分頁名稱（原始名稱，未編碼）' },
+      { method: 'GET',    url: '/api/test/tabRaw=:tab',      description: '取得分頁原始資料（二維陣列，不處理標題），供 Agent 了解分頁結構' },
       { method: 'GET',    url: '/api/test/tab=:tab',         description: '取得分頁全部資料列，:tab 為 encodeURIComponent 編碼後的分頁名稱' },
       { method: 'GET',    url: '/api/test/tab=:tab/row=N',   description: '取得第 N 筆資料' },
       { method: 'GET',    url: '/api/test/tab=:tab/row=X-Y', description: '取得第 X～Y 筆資料' },
@@ -251,6 +257,26 @@ app.get('/api/debug/auth', async (req, res) => {
       success: true,
       email: process.env.GOOGLE_CLIENT_EMAIL,
       hasToken: !!token.token,
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// GET /api/:sheet/tabRaw=:tab — 取得分頁原始資料（二維陣列，不處理標題）
+app.get('/api/:sheet/tabRaw=:tab', async (req, res) => {
+  try {
+    const { sheet, tab } = req.params;
+    const sheetId = getSheetId(sheet);
+    const rows = await getRange(sheetId, tab);
+
+    res.json({
+      success: true,
+      sheet,
+      tab,
+      rowCount: rows.length,
+      colCount: rows.length > 0 ? Math.max(...rows.map(r => r.length)) : 0,
+      rows,
     });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -596,6 +622,12 @@ const ROUTES = [
     path: '/api/:sheet/tabsName',
     name: 'getTabs',
     description: '取得測試用 Sheet 的所有分頁名稱（原始名稱，未編碼）',
+  },
+  {
+    method: 'GET',
+    path: '/api/:sheet/tabRaw=:tab',
+    name: 'getTabRaw',
+    description: '取得指定分頁的原始資料（二維陣列，不處理標題），供 Agent 了解分頁結構',
   },
   {
     method: 'GET',
