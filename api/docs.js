@@ -29,6 +29,7 @@ function buildEndpoints(sheet) {
     { method: 'POST',   url: `/api/${sheet}/tab=:tab`,         description: '新增資料（單/多筆）  body: { values:[...或[[...]]] } 或 { rows:[{欄位名:值,...},...] }。注意：rows 格式的 key 必須與分頁標題列欄位名稱完全一致，不符的 key 將被忽略寫入空白。' },
     { method: 'POST',   url: `/api/${sheet}/tab=:tab/col=:col`,          description: '新增欄位（可同時填值）  body: { values: [...] }，values 為選填' },
     { method: 'PUT',    url: `/api/${sheet}/renameTab=:tab/to=:newTab`,  description: '改分頁名稱，:tab 為舊名稱，:newTab 為新名稱（均需 encodeURIComponent 編碼）' },
+    { method: 'PUT',    url: `/api/${sheet}/moveTab=:tab/toIndex=:index`, description: '移動分頁到指定位置，:index 為目標排序（0 = 最前）' },
     { method: 'PUT',    url: `/api/${sheet}/tab=:tab/col=:col/to=:newCol`, description: '修改欄位名稱，:col 為舊名稱，:newCol 為新名稱（均需 encodeURIComponent 編碼）' },
     { method: 'PUT',    url: `/api/${sheet}/tab=:tab/row=N`,   description: '更新第 N 筆資料  body: { values: [...] }' },
     { method: 'DELETE', url: `/api/${sheet}/tab=:tab/row=N`,   description: '清空第 N 筆資料' },
@@ -271,6 +272,12 @@ export const ROUTES = [
     path: '/api/:sheet/renameTab=:tab/to=:newTab',
     name: 'renameTab',
     description: '改分頁名稱，:tab 為舊名稱，:newTab 為新名稱（均需 encodeURIComponent 編碼）',
+  },
+  {
+    method: 'PUT',
+    path: '/api/:sheet/moveTab=:tab/toIndex=:index',
+    name: 'moveTab',
+    description: '移動分頁到指定位置，:index 為目標排序（0 = 最前）',
   },
   {
     method: 'PUT',

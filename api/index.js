@@ -505,6 +505,44 @@ app.put('/api/:sheet/renameTab=:tab/to=:newTab', async (req, res) => {
   }
 });
 
+// PUT /api/:sheet/moveTab=:tab/toIndex=:index — 移動分頁到指定位置（0 = 最前）
+app.put('/api/:sheet/moveTab=:tab/toIndex=:index', async (req, res) => {
+  try {
+    const { sheet, tab } = req.params;
+    const index = parseInt(req.params.index);
+
+    if (isNaN(index) || index < 0) {
+      return res.status(400).json({ error: 'toIndex 必須是大於等於 0 的整數' });
+    }
+
+    const sheetId = getSheetId(sheet);
+    const spreadsheet = await sheets.spreadsheets.get({
+      spreadsheetId: sheetId,
+      fields: 'sheets.properties',
+    });
+    const found = spreadsheet.data.sheets.find(s => s.properties.title === tab);
+    if (!found) {
+      return res.status(404).json({ success: false, error: `找不到分頁「${tab}」` });
+    }
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: sheetId,
+      resource: {
+        requests: [{
+          updateSheetProperties: {
+            properties: { sheetId: found.properties.sheetId, index },
+            fields: 'index',
+          },
+        }],
+      },
+    });
+
+    res.json({ success: true, sheet, tab, toIndex: index });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // GET /api/:sheet — 與入口相同的 API 說明，但顯示指定 sheet 名稱
 app.get('/api/:sheet', (req, res) => {
   const { sheet } = req.params;
