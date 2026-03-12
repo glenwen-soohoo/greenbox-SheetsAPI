@@ -73,6 +73,41 @@ function colToLetter(index) {
   return letter;
 }
 
+// ─── Format helpers ────────────────────────────────────────────────────────────
+
+function hexToColor(hex) {
+  const clean = hex.replace('#', '');
+  return {
+    red:   parseInt(clean.substring(0, 2), 16) / 255,
+    green: parseInt(clean.substring(2, 4), 16) / 255,
+    blue:  parseInt(clean.substring(4, 6), 16) / 255,
+  };
+}
+
+function buildSimpleFormat({ backgroundColor, textColor, bold, italic, fontSize, fontFamily, horizontalAlignment, verticalAlignment, wrapStrategy }) {
+  const format = {};
+  const fields = [];
+
+  if (backgroundColor !== undefined) {
+    format.backgroundColor = hexToColor(backgroundColor);
+    fields.push('userEnteredFormat.backgroundColor');
+  }
+
+  const textFormat = {};
+  if (textColor    !== undefined) { textFormat.foregroundColor = hexToColor(textColor); fields.push('userEnteredFormat.textFormat.foregroundColor'); }
+  if (bold         !== undefined) { textFormat.bold        = bold;        fields.push('userEnteredFormat.textFormat.bold'); }
+  if (italic       !== undefined) { textFormat.italic      = italic;      fields.push('userEnteredFormat.textFormat.italic'); }
+  if (fontSize     !== undefined) { textFormat.fontSize    = fontSize;    fields.push('userEnteredFormat.textFormat.fontSize'); }
+  if (fontFamily   !== undefined) { textFormat.fontFamily  = fontFamily;  fields.push('userEnteredFormat.textFormat.fontFamily'); }
+  if (Object.keys(textFormat).length > 0) format.textFormat = textFormat;
+
+  if (horizontalAlignment !== undefined) { format.horizontalAlignment = horizontalAlignment; fields.push('userEnteredFormat.horizontalAlignment'); }
+  if (verticalAlignment   !== undefined) { format.verticalAlignment   = verticalAlignment;   fields.push('userEnteredFormat.verticalAlignment'); }
+  if (wrapStrategy        !== undefined) { format.wrapStrategy        = wrapStrategy;        fields.push('userEnteredFormat.wrapStrategy'); }
+
+  return { format, fields };
+}
+
 // ─── Routes ────────────────────────────────────────────────────────────────────
 
 // GET / — API 入口導覽
@@ -538,6 +573,112 @@ app.put('/api/:sheet/moveTab=:tab/toIndex=:index', async (req, res) => {
     });
 
     res.json({ success: true, sheet, tab, toIndex: index });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// GET /api/:sheet/tab=:tab/format=:range — 讀取儲存格格式（A1 notation，如 B2:J7）
+app.get('/api/:sheet/tab=:tab/format=:range', async (req, res) => {
+  try {
+    const { sheet, tab, range } = req.params;
+    const sheetId = getSheetId(sheet);
+    const result = await sheets.spreadsheets.get({
+      spreadsheetId: sheetId,
+      ranges: [`${tab}!${range}`],
+      includeGridData: true,
+      fields: 'sheets.data.rowData.values.userEnteredFormat,sheets.data.rowData.values.effectiveFormat',
+    });
+
+    const rowData = result.data.sheets?.[0]?.data?.[0]?.rowData ?? [];
+    const data = rowData.map(row =>
+      (row.values ?? []).map(cell => ({
+        userEnteredFormat: cell.userEnteredFormat ?? null,
+        effectiveFormat:   cell.effectiveFormat   ?? null,
+      }))
+    );
+
+    res.json({ success: true, sheet, tab, range, data });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// PUT /api/:sheet/tab=:tab/format — 編輯格式（原生 userEnteredFormat）
+// body: { range: { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex }, format: { ...userEnteredFormat } }
+app.put('/api/:sheet/tab=:tab/format', async (req, res) => {
+  try {
+    const { sheet, tab } = req.params;
+    const { range, format } = req.body;
+
+    if (!range || typeof range !== 'object') {
+      return res.status(400).json({ error: 'body 需包含 range: { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex }' });
+    }
+    if (!format || typeof format !== 'object') {
+      return res.status(400).json({ error: 'body 需包含 format: { ...userEnteredFormat }' });
+    }
+
+    const sheetId = getSheetId(sheet);
+    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: sheetId, fields: 'sheets.properties' });
+    const found = spreadsheet.data.sheets.find(s => s.properties.title === tab);
+    if (!found) return res.status(404).json({ success: false, error: `找不到分頁「${tab}」` });
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: sheetId,
+      resource: {
+        requests: [{
+          repeatCell: {
+            range: { sheetId: found.properties.sheetId, ...range },
+            cell: { userEnteredFormat: format },
+            fields: 'userEnteredFormat',
+          },
+        }],
+      },
+    });
+
+    res.json({ success: true, sheet, tab, range, format });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// PUT /api/:sheet/tab=:tab/formatSimple — 編輯格式（簡化版）
+// body: { range: { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex },
+//         backgroundColor, textColor, bold, italic, fontSize, fontFamily,
+//         horizontalAlignment, verticalAlignment, wrapStrategy }
+app.put('/api/:sheet/tab=:tab/formatSimple', async (req, res) => {
+  try {
+    const { sheet, tab } = req.params;
+    const { range, ...styleProps } = req.body;
+
+    if (!range || typeof range !== 'object') {
+      return res.status(400).json({ error: 'body 需包含 range: { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex }' });
+    }
+
+    const { format, fields } = buildSimpleFormat(styleProps);
+    if (fields.length === 0) {
+      return res.status(400).json({ error: '至少需要提供一個樣式屬性（backgroundColor、textColor、bold、italic、fontSize、fontFamily、horizontalAlignment、verticalAlignment、wrapStrategy）' });
+    }
+
+    const sheetId = getSheetId(sheet);
+    const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: sheetId, fields: 'sheets.properties' });
+    const found = spreadsheet.data.sheets.find(s => s.properties.title === tab);
+    if (!found) return res.status(404).json({ success: false, error: `找不到分頁「${tab}」` });
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: sheetId,
+      resource: {
+        requests: [{
+          repeatCell: {
+            range: { sheetId: found.properties.sheetId, ...range },
+            cell: { userEnteredFormat: format },
+            fields: fields.join(','),
+          },
+        }],
+      },
+    });
+
+    res.json({ success: true, sheet, tab, range, appliedFields: fields, format });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
