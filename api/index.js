@@ -433,6 +433,7 @@ app.put('/api/:sheet/tab=:tab/col=:col/to=:newCol', async (req, res) => {
 });
 
 // PUT /api/:sheet/tab=:tab/row=:row — 更新指定資料列
+// row 從 1 開始（不含標題列）；row=0 代表標題列
 // body: { values: ["欄位1", "欄位2", ...] }
 app.put('/api/:sheet/tab=:tab/row=:row', async (req, res) => {
   try {
@@ -440,8 +441,8 @@ app.put('/api/:sheet/tab=:tab/row=:row', async (req, res) => {
     const row = parseInt(req.params.row);
     const { values } = req.body;
 
-    if (isNaN(row) || row < 1) {
-      return res.status(400).json({ error: 'row 必須是大於 0 的整數' });
+    if (isNaN(row) || row < 0) {
+      return res.status(400).json({ error: 'row 必須是 0 或正整數（0 = 標題列）' });
     }
     if (!values || !Array.isArray(values)) {
       return res.status(400).json({ error: 'body 需包含 values: [...]' });
@@ -462,14 +463,42 @@ app.put('/api/:sheet/tab=:tab/row=:row', async (req, res) => {
   }
 });
 
+// DELETE /api/:sheet/tab=:tab/row=:startRow-:endRow — 清空指定範圍資料列（含頭尾）
+// X-Y 從 1 開始（不含標題列），X <= Y
+app.delete('/api/:sheet/tab=:tab/row=:startRow-:endRow', async (req, res) => {
+  try {
+    const { sheet, tab } = req.params;
+    const startRow = parseInt(req.params.startRow);
+    const endRow = parseInt(req.params.endRow);
+
+    if (isNaN(startRow) || isNaN(endRow) || startRow < 1 || endRow < startRow) {
+      return res.status(400).json({ error: 'row 範圍無效，需滿足 X >= 1 且 X <= Y' });
+    }
+
+    const sheetId = getSheetId(sheet);
+    const sheetStart = startRow + 1;
+    const sheetEnd = endRow + 1;
+
+    const result = await sheets.spreadsheets.values.clear({
+      spreadsheetId: sheetId,
+      range: `${tab}!${sheetStart}:${sheetEnd}`,
+    });
+
+    res.json({ success: true, sheet, tab, startRow, endRow, result: result.data });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // DELETE /api/:sheet/tab=:tab/row=:row — 清空指定資料列
+// row 從 1 開始（不含標題列）；row=0 代表標題列
 app.delete('/api/:sheet/tab=:tab/row=:row', async (req, res) => {
   try {
     const { sheet, tab } = req.params;
     const row = parseInt(req.params.row);
 
-    if (isNaN(row) || row < 1) {
-      return res.status(400).json({ error: 'row 必須是大於 0 的整數' });
+    if (isNaN(row) || row < 0) {
+      return res.status(400).json({ error: 'row 必須是 0 或正整數（0 = 標題列）' });
     }
 
     const sheetId = getSheetId(sheet);

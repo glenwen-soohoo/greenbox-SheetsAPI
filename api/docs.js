@@ -7,14 +7,20 @@ const SHARED_WHAT =
   '這是一個串接 Google Sheets 的 API，讓程式可以透過 HTTP 讀寫試算表資料。';
 
 const SHARED_ROW_NUMBERING =
-  'row 從 1 開始，不含標題列。row=1 是第一筆資料（Google Sheets 第 2 行）。';
+  'row 從 1 開始，不含標題列。row=1 是第一筆資料（Google Sheets 第 2 行）。row=0 代表標題列（Google Sheets 第 1 行），僅適用於單行的 PUT 與 DELETE。';
+
+// Agent 行為規範（所有模式共用，放在回應最前面讓 Agent 最先讀到）
+const SHARED_AGENT_RULES = [
+  '【URL 編碼 — 必須遵守】每次構造含有中文或特殊字元的分頁名稱 URL 時，都必須先對分頁名稱執行 encodeURIComponent，再放入 URL。直接貼入中文會導致 404 或亂碼。正確流程：① 呼叫 /tabsName 取得原始分頁名稱 → ② 對名稱執行 encodeURIComponent → ③ 將編碼結果放入 URL。locked 模式中 operations 的 URL 已預先完成編碼，可直接使用；但若需自行構造任何新 URL，仍須重新編碼，不可直接複製貼上中文。',
+  '【格式操作 — 先確認再執行】以下兩種情況可直接執行格式相關操作（format、formatSimple、copyFormat）：① 這是你已重複執行多次、使用者從未異議的固定任務；② 這是排程或自動化任務。除此之外，若使用者未在本次對話中明確要求修改格式，不可主動呼叫格式 API。若你認為調整格式有幫助，應先詢問使用者確認後再執行。',
+];
 
 function buildUrlEncoding(sheet) {
   return (
-    `當分頁名稱包含中文或特殊字元時，必須使用 encodeURIComponent 編碼後再放入 URL。` +
+    `【重要】分頁名稱含有中文或特殊字元時，每次放入 URL 前都必須執行 encodeURIComponent，不可省略。` +
     `例：分頁「測試」→ encodeURIComponent("測試") = "%E6%B8%AC%E8%A9%A6"，` +
-    `URL 為 /api/${sheet}/tab=%E6%B8%AC%E8%A9%A6。` +
-    `建議先呼叫 /api/${sheet}/tabsName 取得分頁名稱，再自行編碼組合 URL。`
+    `完整 URL 為 /api/${sheet}/tab=%E6%B8%AC%E8%A9%A6。` +
+    `建議流程：先呼叫 /api/${sheet}/tabsName 取得原始分頁名稱 → 再執行 encodeURIComponent → 最後組合 URL。`
   );
 }
 
@@ -27,16 +33,17 @@ function buildEndpoints(sheet) {
     { method: 'GET',    url: `/api/${sheet}/tab=:tab/row=X-Y`, description: '取得第 X～Y 筆資料' },
     { method: 'GET',    url: `/api/${sheet}/tab=:tab/format=:range`, description: '讀取儲存格格式，:range 為 A1 notation（如 B2:J7）' },
     { method: 'POST',   url: `/api/${sheet}/createTab=:tab`,    description: '建立新分頁，:tab 為新分頁名稱（encodeURIComponent 編碼）' },
-    { method: 'POST',   url: `/api/${sheet}/copyFormat=:sourceTab/to=:destTab`, description: '複製分頁格式到另一個分頁  body: { source: { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex }, destination: {...} }（0-based，end exclusive；destination 省略則與 source 同位置）' },
+    { method: 'POST',   url: `/api/${sheet}/copyFormat=:sourceTab/to=:destTab`, description: '【格式操作，請先確認授權】複製分頁格式到另一個分頁  body: { source: { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex }, destination: {...} }（0-based，end exclusive；destination 省略則與 source 同位置）' },
     { method: 'POST',   url: `/api/${sheet}/tab=:tab`,         description: '新增資料（單/多筆）  body: { values:[...或[[...]]] } 或 { rows:[{欄位名:值,...},...] }。注意：rows 格式的 key 必須與分頁標題列欄位名稱完全一致，不符的 key 將被忽略寫入空白。' },
     { method: 'POST',   url: `/api/${sheet}/tab=:tab/col=:col`,          description: '新增欄位（可同時填值）  body: { values: [...] }，values 為選填' },
     { method: 'PUT',    url: `/api/${sheet}/renameTab=:tab/to=:newTab`,  description: '改分頁名稱，:tab 為舊名稱，:newTab 為新名稱（均需 encodeURIComponent 編碼）' },
-    { method: 'PUT',    url: `/api/${sheet}/tab=:tab/format`,       description: '編輯格式（原生）  body: { range: { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex }, format: { ...userEnteredFormat } }' },
-    { method: 'PUT',    url: `/api/${sheet}/tab=:tab/formatSimple`, description: '編輯格式（簡化）  body: { range: {...}, backgroundColor, textColor, bold, italic, fontSize, fontFamily, horizontalAlignment, verticalAlignment, wrapStrategy }' },
+    { method: 'PUT',    url: `/api/${sheet}/tab=:tab/format`,       description: '【格式操作，請先確認授權】編輯格式（原生）  body: { range: { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex }, format: { ...userEnteredFormat } }' },
+    { method: 'PUT',    url: `/api/${sheet}/tab=:tab/formatSimple`, description: '【格式操作，請先確認授權】編輯格式（簡化）  body: { range: {...}, backgroundColor, textColor, bold, italic, fontSize, fontFamily, horizontalAlignment, verticalAlignment, wrapStrategy }' },
     { method: 'PUT',    url: `/api/${sheet}/moveTab=:tab/toIndex=:index`, description: '移動分頁到指定位置，:index 為目標排序（0 = 最前）' },
     { method: 'PUT',    url: `/api/${sheet}/tab=:tab/col=:col/to=:newCol`, description: '修改欄位名稱，:col 為舊名稱，:newCol 為新名稱（均需 encodeURIComponent 編碼）' },
-    { method: 'PUT',    url: `/api/${sheet}/tab=:tab/row=N`,   description: '更新第 N 筆資料  body: { values: [...] }' },
-    { method: 'DELETE', url: `/api/${sheet}/tab=:tab/row=N`,   description: '清空第 N 筆資料' },
+    { method: 'PUT',    url: `/api/${sheet}/tab=:tab/row=N`,   description: '更新第 N 筆資料  body: { values: [...] }（N=0 代表標題列）' },
+    { method: 'DELETE', url: `/api/${sheet}/tab=:tab/row=N`,   description: '清空第 N 筆資料（N=0 代表標題列）' },
+    { method: 'DELETE', url: `/api/${sheet}/tab=:tab/row=X-Y`, description: '清空第 X～Y 筆資料（含頭尾，X >= 1）' },
   ];
 }
 
@@ -81,7 +88,12 @@ function buildOperations(sheet, tabs) {
       deleteRow: {
         method: 'DELETE',
         url: `/api/${sheet}/tab=${encodedTab}/row=N`,
-        description: '清空第 N 筆資料的內容（列保留），N 替換為正整數',
+        description: '清空第 N 筆資料的內容（列保留），N 替換為正整數；N=0 代表標題列',
+      },
+      deleteRows: {
+        method: 'DELETE',
+        url: `/api/${sheet}/tab=${encodedTab}/row=X-Y`,
+        description: '清空第 X 到第 Y 筆資料（含頭尾，X >= 1），X、Y 替換為正整數且 X <= Y',
       },
       addColumn: {
         method: 'POST',
@@ -121,6 +133,7 @@ function buildTestHowToUse(tabs = []) {
 
   if (locked) {
     return {
+      agentRules: SHARED_AGENT_RULES,
       mode: 'locked',
       context,
       instruction:
@@ -128,13 +141,14 @@ function buildTestHowToUse(tabs = []) {
         'operations 中已提供每個分頁的完整 URL，URL 裡的分頁名稱已 URL 編碼（encodeURIComponent），可直接使用，不可自行修改。' +
         '只有 N、X、Y 需要替換為實際數字。不要對其他分頁進行任何操作。',
       allowedTabs: tabs,
-      urlEncoding: '所有 URL 中的分頁名稱（tab= 後的部分）均已使用 encodeURIComponent 編碼。若要自行構造 URL，中文或特殊字元的分頁名稱必須先經過 encodeURIComponent 處理。',
+      urlEncoding: '所有 URL 中的分頁名稱（tab= 後的部分）均已使用 encodeURIComponent 編碼，可直接使用。若需自行構造新 URL，中文或特殊字元的分頁名稱仍須先經過 encodeURIComponent 處理，不可直接使用中文。',
       rowNumbering: SHARED_ROW_NUMBERING,
       operations: buildOperations(SHEET_TEST, tabs),
     };
   }
 
   return {
+    agentRules: SHARED_AGENT_RULES,
     mode: 'generic',
     context,
     urlEncoding: buildUrlEncoding(SHEET_TEST),
@@ -170,6 +184,7 @@ function buildPersonalHowToUse(sheet, tabs = []) {
 
   if (locked) {
     return {
+      agentRules: SHARED_AGENT_RULES,
       sheetBinding,
       mode: 'locked',
       context,
@@ -178,13 +193,14 @@ function buildPersonalHowToUse(sheet, tabs = []) {
         'operations 中已提供每個分頁的完整 URL，URL 裡的分頁名稱已 URL 編碼（encodeURIComponent），可直接使用，不可自行修改。' +
         '只有 N、X、Y 需要替換為實際數字。遇到錯誤請回報，不要自行嘗試其他 sheet 或分頁。',
       allowedTabs: tabs,
-      urlEncoding: '所有 URL 中的分頁名稱（tab= 後的部分）均已使用 encodeURIComponent 編碼。若要自行構造 URL，中文或特殊字元的分頁名稱必須先經過 encodeURIComponent 處理。',
+      urlEncoding: '所有 URL 中的分頁名稱（tab= 後的部分）均已使用 encodeURIComponent 編碼，可直接使用。若需自行構造新 URL，中文或特殊字元的分頁名稱仍須先經過 encodeURIComponent 處理，不可直接使用中文。',
       rowNumbering: SHARED_ROW_NUMBERING,
       operations: buildOperations(sheet, tabs),
     };
   }
 
   return {
+    agentRules: SHARED_AGENT_RULES,
     sheetBinding,
     mode: 'generic',
     context,
@@ -269,7 +285,7 @@ export const ROUTES = [
     method: 'POST',
     path: '/api/:sheet/copyFormat=:sourceTab/to=:destTab',
     name: 'copyFormat',
-    description: '複製分頁格式到另一個分頁  body: { source: { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex }, destination: {...} }（0-based，end exclusive；destination 省略則與 source 同位置）',
+    description: '【格式操作，請先確認授權】複製分頁格式到另一個分頁  body: { source: { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex }, destination: {...} }（0-based，end exclusive；destination 省略則與 source 同位置）',
   },
   {
     method: 'POST',
@@ -305,13 +321,13 @@ export const ROUTES = [
     method: 'PUT',
     path: '/api/:sheet/tab=:tab/format',
     name: 'setFormat',
-    description: '編輯格式（原生）  body: { range: { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex }, format: { ...userEnteredFormat } }',
+    description: '【格式操作，請先確認授權】編輯格式（原生）  body: { range: { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex }, format: { ...userEnteredFormat } }',
   },
   {
     method: 'PUT',
     path: '/api/:sheet/tab=:tab/formatSimple',
     name: 'setFormatSimple',
-    description: '編輯格式（簡化）  body: { range: {...}, backgroundColor, textColor, bold, italic, fontSize, fontFamily, horizontalAlignment, verticalAlignment, wrapStrategy }',
+    description: '【格式操作，請先確認授權】編輯格式（簡化）  body: { range: {...}, backgroundColor, textColor, bold, italic, fontSize, fontFamily, horizontalAlignment, verticalAlignment, wrapStrategy }',
   },
   {
     method: 'PUT',
@@ -323,7 +339,13 @@ export const ROUTES = [
     method: 'DELETE',
     path: '/api/:sheet/tab=:tab/row=:row',
     name: 'deleteRow',
-    description: '清空指定分頁第 N 筆資料（列保留、內容清除）',
+    description: '清空指定分頁第 N 筆資料（列保留、內容清除）。N=0 代表標題列',
+  },
+  {
+    method: 'DELETE',
+    path: '/api/:sheet/tab=:tab/row=:startRow-:endRow',
+    name: 'deleteRows',
+    description: '清空指定分頁第 X～Y 筆資料（含頭尾，X >= 1）',
   },
 ];
 
