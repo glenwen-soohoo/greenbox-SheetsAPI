@@ -88,15 +88,17 @@ function getClientIp(req) {
   return req.socket?.remoteAddress ?? '';
 }
 
-async function appendSheetsApiAccessLogRow(req, t0, { routeSheet, tabName, routeSuffix, httpStatus, errorMessage }) {
+async function appendSheetsApiAccessLogRow(req, t0, { routeSheet, tabName, httpMethod, routeSuffix, httpStatus, errorMessage }) {
   const spreadsheetId = getAccessLogSpreadsheetId();
   if (!spreadsheetId) return;
 
   const durationMs = Math.round(performance.now() - t0);
+  // 欄位：timestamp_utc, route_sheet, tab_name, http_method, route_suffix, client_ip, user_agent, duration_ms, http_status, error_message
   const row = [
     new Date().toISOString(),
     routeSheet,
     tabName ?? '',
+    httpMethod ?? '',
     routeSuffix ?? '',
     getClientIp(req),
     truncateStr(req.headers['user-agent'] ?? '', 200),
@@ -108,7 +110,7 @@ async function appendSheetsApiAccessLogRow(req, t0, { routeSheet, tabName, route
   try {
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: 'SheetsAPI!A:I',
+      range: 'SheetsAPI!A:J',
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       resource: { values: [row] },
@@ -118,7 +120,7 @@ async function appendSheetsApiAccessLogRow(req, t0, { routeSheet, tabName, route
   }
 }
 
-/** `/api/:sheet` 之後的路徑片段（不含 query） */
+/** `/api/:sheet` 之後的路徑片段（不含 query）；可能含 URL 編碼字元 */
 function pathAfterSheetParam(req) {
   const sheet = req.params.sheet;
   const base = `/api/${sheet}`;
@@ -126,6 +128,41 @@ function pathAfterSheetParam(req) {
   if (p === base || p === `${base}/`) return '';
   if (p.startsWith(`${base}/`)) return p.slice(base.length + 1);
   return p;
+}
+
+/** 解碼 path 供 log 顯示中文（%E9… → 字元） */
+function decodePathRestForLog(rawPathRest) {
+  if (!rawPathRest) return '';
+  try {
+    return decodeURIComponent(rawPathRest);
+  } catch {
+    return rawPathRest;
+  }
+}
+
+/**
+ * 與先前手動欄位邏輯一致：tab / tabRaw 的值寫在 tab_name，後面沒有子路徑則 route_suffix 為空。
+ * 例：tab=送達文字 → suffix ''；tab=Sheet/row=3 → suffix row=3（已解碼）
+ */
+function computeRouteSuffixForLog(req, rawPathRest) {
+  const decoded = decodePathRestForLog(rawPathRest);
+  const tab = req.params.tab;
+  if (tab === undefined || tab === '') {
+    return decoded;
+  }
+  const slash = decoded.indexOf('/');
+  const firstSeg = slash === -1 ? decoded : decoded.slice(0, slash);
+  const afterFirst = slash === -1 ? '' : decoded.slice(slash + 1);
+  if (!(firstSeg.startsWith('tab=') || firstSeg.startsWith('tabRaw='))) {
+    return decoded;
+  }
+  const eq = firstSeg.indexOf('=');
+  if (eq === -1) return decoded;
+  const nameInPath = firstSeg.slice(eq + 1);
+  if (nameInPath !== tab) {
+    return decoded;
+  }
+  return afterFirst;
 }
 
 /** 所有 /api/:sheet/* 共用；排除 health、debug（避免 sheet=health 誤判） */
@@ -136,7 +173,9 @@ function sheetsApiAccessLogMiddleware(req, res, next) {
 
   const t0 = performance.now();
   const sheet = req.params.sheet;
-  const pathRest = pathAfterSheetParam(req);
+  const rawPathRest = pathAfterSheetParam(req);
+  const routeSuffix = computeRouteSuffixForLog(req, rawPathRest);
+  const tabName = req.params.tab ?? '';
 
   const origJson = res.json.bind(res);
   res.json = function (body) {
@@ -150,12 +189,11 @@ function sheetsApiAccessLogMiddleware(req, res, next) {
     ) {
       errMsg = String(body.error);
     }
-    const routeSuffix = pathRest ? `${req.method} ${pathRest}` : req.method;
-    const tabName = req.params.tab ?? '';
 
     appendSheetsApiAccessLogRow(req, t0, {
       routeSheet: sheet,
       tabName,
+      httpMethod: req.method,
       routeSuffix,
       httpStatus: status,
       errorMessage: status < 400 ? '' : errMsg,
