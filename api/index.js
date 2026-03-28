@@ -61,7 +61,7 @@ async function getRange(sheetId, range) {
   return res.data.values || [];
 }
 
-// ─── Read error log → 固定試算表 SheetsAPI 分頁（僅 4xx/5xx 寫入）────────────────
+// ─── API 稽核 log → 固定試算表 SheetsAPI 分頁：/api/:sheet 底下每次呼叫（GET/POST/PUT/DELETE）皆寫入 ──
 
 const DEFAULT_ACCESS_LOG_SPREADSHEET_ID = '1mqe413XRGlY0ZzW2dDf12MB72un7XEXcYKv6DmbgY5E';
 
@@ -88,7 +88,7 @@ function getClientIp(req) {
   return req.socket?.remoteAddress ?? '';
 }
 
-async function appendReadErrorLogRow(req, t0, { routeSheet, tabName, routeSuffix, httpStatus, errorMessage }) {
+async function appendSheetsApiAccessLogRow(req, t0, { routeSheet, tabName, routeSuffix, httpStatus, errorMessage }) {
   const spreadsheetId = getAccessLogSpreadsheetId();
   if (!spreadsheetId) return;
 
@@ -108,18 +108,65 @@ async function appendReadErrorLogRow(req, t0, { routeSheet, tabName, routeSuffix
   try {
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: 'SheetsAPI',
+      range: 'SheetsAPI!A:I',
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       resource: { values: [row] },
     });
   } catch (err) {
-    console.error('appendReadErrorLogRow failed:', err.message || err);
+    console.error('appendSheetsApiAccessLogRow failed:', err.message || err);
   }
 }
 
-function fireReadErrorLog(req, t0, fields) {
-  void appendReadErrorLogRow(req, t0, fields);
+/** `/api/:sheet` 之後的路徑片段（不含 query） */
+function pathAfterSheetParam(req) {
+  const sheet = req.params.sheet;
+  const base = `/api/${sheet}`;
+  const p = req.path;
+  if (p === base || p === `${base}/`) return '';
+  if (p.startsWith(`${base}/`)) return p.slice(base.length + 1);
+  return p;
+}
+
+/** 所有 /api/:sheet/* 共用；排除 health、debug（避免 sheet=health 誤判） */
+function sheetsApiAccessLogMiddleware(req, res, next) {
+  if (req.path === '/api/health' || req.path.startsWith('/api/debug/')) {
+    return next();
+  }
+
+  const t0 = performance.now();
+  const sheet = req.params.sheet;
+  const pathRest = pathAfterSheetParam(req);
+
+  const origJson = res.json.bind(res);
+  res.json = function (body) {
+    const status = res.statusCode || 200;
+    let errMsg = '';
+    if (
+      status >= 400 &&
+      body &&
+      typeof body === 'object' &&
+      body.error != null
+    ) {
+      errMsg = String(body.error);
+    }
+    const routeSuffix = pathRest ? `${req.method} ${pathRest}` : req.method;
+    const tabName = req.params.tab ?? '';
+
+    appendSheetsApiAccessLogRow(req, t0, {
+      routeSheet: sheet,
+      tabName,
+      routeSuffix,
+      httpStatus: status,
+      errorMessage: status < 400 ? '' : errMsg,
+    })
+      .catch(() => {})
+      .finally(() => {
+        origJson(body);
+      });
+  };
+
+  next();
 }
 
 // 欄位索引（0-based）轉 A1 欄位字母，例如 0→A, 25→Z, 26→AA
@@ -171,6 +218,8 @@ function buildSimpleFormat({ backgroundColor, textColor, bold, italic, fontSize,
 
 // ─── Routes ────────────────────────────────────────────────────────────────────
 
+app.use('/api/:sheet', sheetsApiAccessLogMiddleware);
+
 // GET / — API 入口導覽
 app.get('/', (req, res) => {
   res.json({
@@ -193,7 +242,6 @@ app.get('/api/health', (req, res) => {
 
 // GET /api/:sheet/tabsName — 取得所有分頁名稱
 app.get('/api/:sheet/tabsName', async (req, res) => {
-  const t0 = performance.now();
   try {
     const { sheet } = req.params;
     const sheetId = getSheetId(sheet);
@@ -204,13 +252,6 @@ app.get('/api/:sheet/tabsName', async (req, res) => {
     const tabs = response.data.sheets.map(s => s.properties.title);
     res.json({ success: true, sheet, tabCount: tabs.length, tabs });
   } catch (e) {
-    fireReadErrorLog(req, t0, {
-      routeSheet: req.params.sheet,
-      tabName: '',
-      routeSuffix: 'tabsName',
-      httpStatus: 500,
-      errorMessage: e.message,
-    });
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -252,7 +293,6 @@ app.get('/api/debug/auth', async (req, res) => {
 
 // GET /api/:sheet/tabRaw=:tab — 取得分頁原始資料（二維陣列，不處理標題）
 app.get('/api/:sheet/tabRaw=:tab', async (req, res) => {
-  const t0 = performance.now();
   try {
     const { sheet, tab } = req.params;
     const sheetId = getSheetId(sheet);
@@ -267,20 +307,12 @@ app.get('/api/:sheet/tabRaw=:tab', async (req, res) => {
       rows,
     });
   } catch (e) {
-    fireReadErrorLog(req, t0, {
-      routeSheet: req.params.sheet,
-      tabName: req.params.tab ?? '',
-      routeSuffix: '',
-      httpStatus: 500,
-      errorMessage: e.message,
-    });
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
 // GET /api/:sheet/tab=:tab — 取得分頁全部資料
 app.get('/api/:sheet/tab=:tab', async (req, res) => {
-  const t0 = performance.now();
   try {
     const { sheet, tab } = req.params;
     const sheetId = getSheetId(sheet);
@@ -295,13 +327,6 @@ app.get('/api/:sheet/tab=:tab', async (req, res) => {
       data,
     });
   } catch (e) {
-    fireReadErrorLog(req, t0, {
-      routeSheet: req.params.sheet,
-      tabName: req.params.tab ?? '',
-      routeSuffix: '',
-      httpStatus: 500,
-      errorMessage: e.message,
-    });
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -309,20 +334,12 @@ app.get('/api/:sheet/tab=:tab', async (req, res) => {
 // GET /api/:sheet/tab=:tab/row=:startRow-:endRow — 取得指定範圍資料列
 // 範圍路由必須在單行路由之前，否則 :row 會吃掉整個 "X-Y" 字串
 app.get('/api/:sheet/tab=:tab/row=:startRow-:endRow', async (req, res) => {
-  const t0 = performance.now();
   try {
     const { sheet, tab } = req.params;
     const startRow = parseInt(req.params.startRow);
     const endRow = parseInt(req.params.endRow);
 
     if (isNaN(startRow) || isNaN(endRow) || startRow < 1 || endRow < startRow) {
-      fireReadErrorLog(req, t0, {
-        routeSheet: sheet,
-        tabName: tab,
-        routeSuffix: `row=${req.params.startRow}-${req.params.endRow}`,
-        httpStatus: 400,
-        errorMessage: 'row 範圍無效，需滿足 X >= 1 且 X <= Y',
-      });
       return res.status(400).json({ error: 'row 範圍無效，需滿足 X >= 1 且 X <= Y' });
     }
 
@@ -337,13 +354,6 @@ app.get('/api/:sheet/tab=:tab/row=:startRow-:endRow', async (req, res) => {
 
     const headers = headerRows[0];
     if (!headers) {
-      fireReadErrorLog(req, t0, {
-        routeSheet: sheet,
-        tabName: tab,
-        routeSuffix: `row=${startRow}-${endRow}`,
-        httpStatus: 404,
-        errorMessage: '找不到標題列',
-      });
       return res.status(404).json({ success: false, error: '找不到標題列' });
     }
 
@@ -353,13 +363,6 @@ app.get('/api/:sheet/tab=:tab/row=:startRow-:endRow', async (req, res) => {
 
     res.json({ success: true, sheet, tab, startRow, endRow, rowCount: data.length, data });
   } catch (e) {
-    fireReadErrorLog(req, t0, {
-      routeSheet: req.params.sheet,
-      tabName: req.params.tab ?? '',
-      routeSuffix: `row=${req.params.startRow}-${req.params.endRow}`,
-      httpStatus: 500,
-      errorMessage: e.message,
-    });
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -367,19 +370,11 @@ app.get('/api/:sheet/tab=:tab/row=:startRow-:endRow', async (req, res) => {
 // GET /api/:sheet/tab=:tab/row=:row — 取得指定資料列
 // row 從 1 開始，對應到第一筆「資料列」（標題列不計入）
 app.get('/api/:sheet/tab=:tab/row=:row', async (req, res) => {
-  const t0 = performance.now();
   try {
     const { sheet, tab } = req.params;
     const row = parseInt(req.params.row);
 
     if (isNaN(row) || row < 1) {
-      fireReadErrorLog(req, t0, {
-        routeSheet: sheet,
-        tabName: tab,
-        routeSuffix: `row=${req.params.row}`,
-        httpStatus: 400,
-        errorMessage: 'row 必須是大於 0 的整數',
-      });
       return res.status(400).json({ error: 'row 必須是大於 0 的整數' });
     }
 
@@ -395,13 +390,6 @@ app.get('/api/:sheet/tab=:tab/row=:row', async (req, res) => {
     const rowData = dataRows[0];
 
     if (!headers || !rowData) {
-      fireReadErrorLog(req, t0, {
-        routeSheet: sheet,
-        tabName: tab,
-        routeSuffix: `row=${row}`,
-        httpStatus: 404,
-        errorMessage: `找不到第 ${row} 筆資料`,
-      });
       return res.status(404).json({ success: false, error: `找不到第 ${row} 筆資料` });
     }
 
@@ -409,14 +397,6 @@ app.get('/api/:sheet/tab=:tab/row=:row', async (req, res) => {
 
     res.json({ success: true, sheet, tab, row, data });
   } catch (e) {
-    const rowParam = req.params.row;
-    fireReadErrorLog(req, t0, {
-      routeSheet: req.params.sheet,
-      tabName: req.params.tab ?? '',
-      routeSuffix: `row=${rowParam}`,
-      httpStatus: 500,
-      errorMessage: e.message,
-    });
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -710,7 +690,6 @@ app.put('/api/:sheet/moveTab=:tab/toIndex=:index', async (req, res) => {
 
 // GET /api/:sheet/tab=:tab/format=:range — 讀取儲存格格式（A1 notation，如 B2:J7）
 app.get('/api/:sheet/tab=:tab/format=:range', async (req, res) => {
-  const t0 = performance.now();
   try {
     const { sheet, tab, range } = req.params;
     const sheetId = getSheetId(sheet);
@@ -731,13 +710,6 @@ app.get('/api/:sheet/tab=:tab/format=:range', async (req, res) => {
 
     res.json({ success: true, sheet, tab, range, data });
   } catch (e) {
-    fireReadErrorLog(req, t0, {
-      routeSheet: req.params.sheet,
-      tabName: req.params.tab ?? '',
-      routeSuffix: `format=${req.params.range ?? ''}`,
-      httpStatus: 500,
-      errorMessage: e.message,
-    });
     res.status(500).json({ success: false, error: e.message });
   }
 });
