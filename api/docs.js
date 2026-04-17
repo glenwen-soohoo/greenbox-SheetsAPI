@@ -40,7 +40,8 @@ function buildEndpoints(sheet) {
     { method: 'PUT',    url: `/api/${sheet}/tab=:tab/format`,       description: '【格式操作，請先確認授權】編輯格式（原生）  body: { range: { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex }, format: { ...userEnteredFormat } }' },
     { method: 'PUT',    url: `/api/${sheet}/tab=:tab/formatSimple`, description: '【格式操作，請先確認授權】編輯格式（簡化）  body: { range: {...}, backgroundColor, textColor, bold, italic, fontSize, fontFamily, horizontalAlignment, verticalAlignment, wrapStrategy }' },
     { method: 'PUT',    url: `/api/${sheet}/moveTab=:tab/toIndex=:index`, description: '移動分頁到指定位置，:index 為目標排序（0 = 最前）' },
-    { method: 'PUT',    url: `/api/${sheet}/tab=:tab/col=:col/to=:newCol`, description: '修改欄位名稱，:col 為舊名稱，:newCol 為新名稱（均需 encodeURIComponent 編碼）' },
+    { method: 'PUT',    url: `/api/${sheet}/tab=:tab/col=:col/to=:newCol`,          description: '修改欄位名稱，:col 為舊名稱，:newCol 為新名稱（均需 encodeURIComponent 編碼）' },
+    { method: 'PUT',    url: `/api/${sheet}/tab=:tab/col=:col/toIndex=:index`,    description: '移動欄位到指定位置，:col 為欄位名稱（encodeURIComponent 編碼），:index 為目標位置（0 = 最左，0-based）' },
     { method: 'PUT',    url: `/api/${sheet}/tab=:tab/row=N`,   description: '更新第 N 筆資料  body: { values: [...] }（N=0 代表標題列）' },
     { method: 'DELETE', url: `/api/${sheet}/tab=:tab/row=N`,   description: '清空第 N 筆資料（N=0 代表標題列）' },
     { method: 'DELETE', url: `/api/${sheet}/tab=:tab/row=X-Y`, description: '清空第 X～Y 筆資料（含頭尾，X >= 1）' },
@@ -106,9 +107,33 @@ function buildOperations(sheet, tabs) {
         url: `/api/${sheet}/tab=${encodedTab}/col=:col/to=:newCol`,
         description: '修改欄位名稱，:col 為舊名稱，:newCol 為新名稱（均需 encodeURIComponent 編碼）。舊名稱必須存在，新名稱不可重複',
       },
+      moveColumn: {
+        method: 'PUT',
+        url: `/api/${sheet}/tab=${encodedTab}/col=:col/toIndex=:index`,
+        description: '移動欄位到指定位置，:col 為欄位名稱（encodeURIComponent 編碼），:index 為目標位置（0 = 最左，0-based）',
+      },
     };
   }
-  return operations;
+
+  // 分頁管理操作（不屬於特定 tab，但 locked 模式下也可以使用）
+  const tabManagement = {};
+  for (const tab of tabs) {
+    const encodedTab = encodeURIComponent(tab);
+    tabManagement[tab] = {
+      rename: {
+        method: 'PUT',
+        url: `/api/${sheet}/renameTab=${encodedTab}/to=:newTab`,
+        description: `將分頁「${tab}」改名，:newTab 為新名稱（encodeURIComponent 編碼）`,
+      },
+      move: {
+        method: 'PUT',
+        url: `/api/${sheet}/moveTab=${encodedTab}/toIndex=:index`,
+        description: `移動分頁「${tab}」到指定位置，:index 為目標排序（0 = 最前）`,
+      },
+    };
+  }
+
+  return { operations, tabManagement };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -132,6 +157,7 @@ function buildTestHowToUse(tabs = []) {
   };
 
   if (locked) {
+    const { operations, tabManagement } = buildOperations(SHEET_TEST, tabs);
     return {
       agentRules: SHARED_AGENT_RULES,
       mode: 'locked',
@@ -139,11 +165,13 @@ function buildTestHowToUse(tabs = []) {
       instruction:
         '你只能操作 allowedTabs 中列出的分頁。' +
         'operations 中已提供每個分頁的完整 URL，URL 裡的分頁名稱已 URL 編碼（encodeURIComponent），可直接使用，不可自行修改。' +
-        '只有 N、X、Y 需要替換為實際數字。不要對其他分頁進行任何操作。',
+        'tabManagement 提供分頁改名與移動的操作，URL 中的分頁名稱同樣已編碼可直接使用，只有 :newTab、:index 需要替換。' +
+        '只有 N、X、Y 以及標示需替換的參數需要帶入實際值。不要對其他分頁進行任何操作。',
       allowedTabs: tabs,
       urlEncoding: '所有 URL 中的分頁名稱（tab= 後的部分）均已使用 encodeURIComponent 編碼，可直接使用。若需自行構造新 URL，中文或特殊字元的分頁名稱仍須先經過 encodeURIComponent 處理，不可直接使用中文。',
       rowNumbering: SHARED_ROW_NUMBERING,
-      operations: buildOperations(SHEET_TEST, tabs),
+      operations,
+      tabManagement,
     };
   }
 
@@ -183,6 +211,7 @@ function buildPersonalHowToUse(sheet, tabs = []) {
   };
 
   if (locked) {
+    const { operations, tabManagement } = buildOperations(sheet, tabs);
     return {
       agentRules: SHARED_AGENT_RULES,
       sheetBinding,
@@ -191,11 +220,13 @@ function buildPersonalHowToUse(sheet, tabs = []) {
       instruction:
         '你只能操作 allowedTabs 中列出的分頁，且所有請求必須使用 sheetBinding 指定的 sheet。' +
         'operations 中已提供每個分頁的完整 URL，URL 裡的分頁名稱已 URL 編碼（encodeURIComponent），可直接使用，不可自行修改。' +
-        '只有 N、X、Y 需要替換為實際數字。遇到錯誤請回報，不要自行嘗試其他 sheet 或分頁。',
+        'tabManagement 提供分頁改名與移動的操作，URL 中的分頁名稱同樣已編碼可直接使用，只有 :newTab、:index 需要替換。' +
+        '只有 N、X、Y 以及標示需替換的參數需要帶入實際值。遇到錯誤請回報，不要自行嘗試其他 sheet 或分頁。',
       allowedTabs: tabs,
       urlEncoding: '所有 URL 中的分頁名稱（tab= 後的部分）均已使用 encodeURIComponent 編碼，可直接使用。若需自行構造新 URL，中文或特殊字元的分頁名稱仍須先經過 encodeURIComponent 處理，不可直接使用中文。',
       rowNumbering: SHARED_ROW_NUMBERING,
-      operations: buildOperations(sheet, tabs),
+      operations,
+      tabManagement,
     };
   }
 
@@ -316,6 +347,12 @@ export const ROUTES = [
     path: '/api/:sheet/tab=:tab/col=:col/to=:newCol',
     name: 'renameColumn',
     description: '修改欄位名稱，:col 為舊名稱，:newCol 為新名稱（均需 encodeURIComponent 編碼）',
+  },
+  {
+    method: 'PUT',
+    path: '/api/:sheet/tab=:tab/col=:col/toIndex=:index',
+    name: 'moveColumn',
+    description: '移動欄位到指定位置，:col 為欄位名稱（encodeURIComponent 編碼），:index 為目標位置（0 = 最左，0-based）',
   },
   {
     method: 'PUT',

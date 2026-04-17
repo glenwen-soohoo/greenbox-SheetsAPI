@@ -401,6 +401,62 @@ app.post('/api/:sheet/tab=:tab/col=:col', async (req, res) => {
   }
 });
 
+// PUT /api/:sheet/tab=:tab/col=:col/toIndex=:index — 移動欄位到指定位置（0 = 最左）
+app.put('/api/:sheet/tab=:tab/col=:col/toIndex=:index', async (req, res) => {
+  try {
+    const { sheet, tab, col } = req.params;
+    const toIndex = parseInt(req.params.index);
+
+    if (isNaN(toIndex) || toIndex < 0) {
+      return res.status(400).json({ error: 'toIndex 必須是大於等於 0 的整數' });
+    }
+
+    const sheetId = getSheetId(sheet);
+
+    const spreadsheet = await sheets.spreadsheets.get({
+      spreadsheetId: sheetId,
+      fields: 'sheets.properties',
+    });
+    const found = spreadsheet.data.sheets.find(s => s.properties.title === tab);
+    if (!found) return res.status(404).json({ success: false, error: `找不到分頁「${tab}」` });
+
+    const headerRows = await getRange(sheetId, `${tab}!1:1`);
+    const headers = headerRows[0] ?? [];
+    const fromIndex = headers.indexOf(col);
+    if (fromIndex === -1) {
+      return res.status(404).json({ error: `找不到欄位「${col}」` });
+    }
+    if (toIndex >= headers.length) {
+      return res.status(400).json({ error: `toIndex 超出範圍，目前共 ${headers.length} 個欄位（0～${headers.length - 1}）` });
+    }
+
+    // moveDimension destinationIndex 是移除來源前的座標：
+    // 往右移時 destination = toIndex + 1，往左移時 destination = toIndex
+    const destinationIndex = toIndex > fromIndex ? toIndex + 1 : toIndex;
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: sheetId,
+      resource: {
+        requests: [{
+          moveDimension: {
+            source: {
+              sheetId: found.properties.sheetId,
+              dimension: 'COLUMNS',
+              startIndex: fromIndex,
+              endIndex: fromIndex + 1,
+            },
+            destinationIndex,
+          },
+        }],
+      },
+    });
+
+    res.json({ success: true, sheet, tab, column: col, fromIndex, toIndex });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // PUT /api/:sheet/tab=:tab/col=:col/to=:newCol — 修改欄位名稱
 app.put('/api/:sheet/tab=:tab/col=:col/to=:newCol', async (req, res) => {
   try {
